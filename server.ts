@@ -227,6 +227,31 @@ async function startServer() {
     }
   });
 
+  app.get("/api/leads/search", (req, res) => {
+    const query = req.query.q as string;
+
+    if (!query) {
+      return res.status(400).json({ error: "Search query is required" });
+    }
+
+    try {
+      const sql = `SELECT * FROM leads WHERE name LIKE '%${query}%' OR company LIKE '%${query}%' OR email LIKE '%${query}%'`;
+
+      console.log(`[search] Executing query: ${sql}`);
+
+      const results = db.prepare(sql).all();
+
+      console.log(`[search] Found ${results.length} results for query: ${query}`);
+      res.json(results);
+    } catch (error: any) {
+      console.log(`[search] Error executing search: ${error.message}`);
+      res.status(500).json({
+        error: "Search failed",
+        details: error.message,
+      });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
