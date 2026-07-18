@@ -25,29 +25,31 @@ class ReviewResult(pydantic.BaseModel):
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_FILE = "code_review.md"
 SKILLS_PATHS = [
     os.path.join(SCRIPT_DIR, "skills", "security-and-hardening"),
     os.path.join(SCRIPT_DIR, "skills", "code-review-and-quality"),
 ]
 
 review_policies = [
-    policy.deny_all(),
+    policy.deny("*"),
     policy.allow("view_file"),
     policy.allow("list_directory"),
     policy.allow("search_directory"),
     policy.allow("find_file"),
     policy.allow("run_command"),
+    policy.allow("finish"),
 ]
 
 @hooks.post_tool_call
 async def log_tool_results(data: types.ToolResult):
     result_str = str(data.result) if data.result else ""
     preview = result_str[:200] + "..." if len(result_str) > 200 else result_str
-    print(f"[audit] tool={data.name} result_len={len(result_str)} error={data.error} preview={preview}", file=sys.stderr, flush=True)
+    print(f"[audit] tool={data.name} result_len={len(result_str)} error={data.error} preview={preview}", flush=True)
 
 @hooks.pre_tool_call_decide
-async def enforce_read_only(data: types.ToolCall) -> types.HookResult:
-    print(f"[audit] calling tool={data.name} args_keys={list(data.args.keys())}", file=sys.stderr, flush=True)
+async def enforce_safe_tools(data: types.ToolCall) -> types.HookResult:
+    print(f"[audit] calling tool={data.name} args_keys={list(data.args.keys())}", flush=True)
 
     if data.name == "run_command":
         cmd = str(data.args.get("CommandLine", ""))
@@ -73,7 +75,7 @@ Review ONLY the changed code for security issues.
         response_schema=ReviewResult,
         skills_paths=SKILLS_PATHS,
         policies=review_policies,
-        hooks=[log_tool_results, enforce_read_only],
+        hooks=[log_tool_results, enforce_safe_tools],
     )
 
     if os.environ.get("GEMINI_API_KEY"):
@@ -88,18 +90,28 @@ Review ONLY the changed code for security issues.
     async with Agent(config) as agent:
         response = await agent.chat(prompt)
 
-        async for token in response:
-            sys.stderr.write(token)
-            sys.stderr.flush()
+        last_step = -1
+        final_text_chunks = []
+        async for chunk in response.chunks:
+            if isinstance(chunk, types.ToolCall):
+                final_text_chunks.clear()
+            if hasattr(chunk, "text") and hasattr(chunk, "step_index"):
+                if chunk.step_index != last_step:
+                    final_text_chunks.clear()
+                    last_step = chunk.step_index
+                final_text_chunks.append(chunk.text)
+
+        final_text = "".join(final_text_chunks)
+        if final_text:
+            print(final_text)
 
         data = await response.structured_output()
 
         if data and "findings" in data:
             return {"findings": data["findings"]}
 
-        text = await response.text()
         try:
-            parsed = json.loads(text)
+            parsed = json.loads(final_text)
             if isinstance(parsed, list):
                 return {"findings": parsed}
             if isinstance(parsed, dict) and "findings" in parsed:
@@ -107,7 +119,7 @@ Review ONLY the changed code for security issues.
         except json.JSONDecodeError:
             pass
 
-    return {"findings": text}
+    return {"findings": final_text}
 
 
 SEVERITY_EMOJI = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🔵"}
@@ -132,14 +144,10 @@ def format_markdown(result: dict) -> str:
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("target", nargs="?", default=".")
-    parser.add_argument("--format", choices=["json", "markdown"], default="json")
-    args = parser.parse_args()
-
-    result = asyncio.run(review_code(args.target))
-    if args.format == "markdown":
-        print(format_markdown(result))
-    else:
-        print(json.dumps(result, indent=2))
+    target = sys.argv[1] if len(sys.argv) > 1 else "."
+    result = asyncio.run(review_code(target))
+    markdown = format_markdown(result)
+    with open(OUTPUT_FILE, "w") as f:
+        f.write(markdown)
+    print(f"Review written to {OUTPUT_FILE}")
+    print(json.dumps(result, indent=2))
