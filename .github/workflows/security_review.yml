@@ -1,33 +1,30 @@
 name: AI Security Review
 
 on:
-  issue_comment:
-    types: [created]
+  pull_request:
+    types: [opened, synchronize]
 
 jobs:
   review:
-    if: >
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request &&
-      contains(github.event.comment.body, '/antigravity review')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
 
+    container:
+      image: ghcr.io/astral-sh/uv:python3.12-bookworm
+
     steps:
+      - name: Install git
+        run: apt-get update && apt-get install -y git
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.issue.pull_request.head.ref }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install uv
-        run: pip install uv
+          fetch-depth: 0
       - name: Run security review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
           uv run --project code_review_agent code_review_agent/review_agent.py . --format markdown > findings.md
       - name: Post findings as PR comment
         if: always()
@@ -39,6 +36,6 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: context.payload.pull_request.number,
               body: body
             });
