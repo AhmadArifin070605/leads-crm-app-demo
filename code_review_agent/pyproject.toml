@@ -1,0 +1,10 @@
+[project]
+name = "code-review-agent"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "google-antigravity==0.1.7",
+]
+
+[project.scripts]
+review = "review_agent:main"
