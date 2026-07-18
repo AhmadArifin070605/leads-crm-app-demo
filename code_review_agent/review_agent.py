@@ -17,7 +17,7 @@ class Finding(pydantic.BaseModel):
     severity: str
     category: str
     description: str
-    fix: str
+    proposed_fix: str = ""
 
 
 class ReviewResult(pydantic.BaseModel):
@@ -43,11 +43,11 @@ review_policies = [
 async def log_tool_results(data: types.ToolResult):
     result_str = str(data.result) if data.result else ""
     preview = result_str[:200] + "..." if len(result_str) > 200 else result_str
-    print(f"[audit] tool={data.name} result_len={len(result_str)} error={data.error} preview={preview}", flush=True)
+    print(f"[audit] tool={data.name} result_len={len(result_str)} error={data.error} preview={preview}", file=sys.stderr, flush=True)
 
 @hooks.pre_tool_call_decide
 async def enforce_read_only(data: types.ToolCall) -> types.HookResult:
-    print(f"[audit] calling tool={data.name} args_keys={list(data.args.keys())}", flush=True)
+    print(f"[audit] calling tool={data.name} args_keys={list(data.args.keys())}", file=sys.stderr, flush=True)
 
     if data.name == "run_command":
         cmd = str(data.args.get("CommandLine", ""))
@@ -89,8 +89,8 @@ Review ONLY the changed code for security issues.
         response = await agent.chat(prompt)
 
         async for token in response:
-            sys.stdout.write(token)
-            sys.stdout.flush()
+            sys.stderr.write(token)
+            sys.stderr.flush()
 
         data = await response.structured_output()
 
@@ -124,7 +124,9 @@ def format_markdown(result: dict) -> str:
         lines.append(f"### {emoji} [{f.get('severity', 'unknown').upper()}] {f.get('category', '')}\n")
         lines.append(f"**{f.get('file', '')}:{f.get('line', '')}**\n")
         lines.append(f"{f.get('description', '')}\n")
-        lines.append(f"**Fix:** {f.get('fix', '')}\n")
+        proposed_fix = f.get('proposed_fix', '')
+        if proposed_fix:
+            lines.append(f"**Proposed fix:** {proposed_fix}\n")
     lines.append("---\n*Powered by Antigravity SDK*")
     return "\n".join(lines)
 
